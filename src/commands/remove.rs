@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::inspect::read_state_with_ignored;
+use crate::jobs;
 use crate::repo::Repo;
 
 /// Remove the managed worktree for `branch`.
@@ -11,26 +12,18 @@ use crate::repo::Repo;
 /// deletion itself is done by `git worktree remove` (never by `fs::remove_*`),
 /// so Git's own registration check is a second line of defence.
 pub fn run(repo: &Repo, branch: &str, force: bool, cwd: &Path) -> Result<()> {
-    // 1. The branch must have a worktree, and it must not be the main one.
-    let wt = repo
-        .find_by_branch(branch)
-        .ok_or_else(|| Error::WorktreeNotFound(branch.to_string()))?;
-    if repo.is_main(wt) {
-        return Err(Error::MainWorktree(branch.to_string()));
-    }
+    // Hold the registry lock for the whole operation, from the first check to
+    // the deletion. `run` takes the same lock to register a job, so a job cannot
+    // slip in between the "no active job" check below and `git worktree remove`:
+    // either its record already exists when we check, or it waits and then finds
+    // the worktree gone. (Without this the check and the delete would race.)
+    let _registry = jobs::registry_lock(repo)?;
 
-    // 2. Prove BranchForge owns it: exact managed path for this branch,
-    //    inside a plain (non-symlink) managed root. `--force` never bypasses this.
-    //    The path check and the root check are separate calls so each failure
-    //    gets its own specific error.
-    if !repo.layout.owns_path(wt) {
-        return Err(Error::NotManaged {
-            branch: branch.to_string(),
-            path: wt.path.clone(),
-            expected: repo.layout.path_for(branch)?,
-        });
-    }
-    repo.layout.check_root()?;
+    // 1-2. The branch must have a worktree, it must not be the main one, and
+    //    BranchForge must own it: exact managed path for this branch, not a
+    //    symlink, inside a plain managed root. `--force` never bypasses this.
+    //    (Each failure has its own specific error; see `Repo::require_managed`.)
+    let wt = repo.require_managed(branch)?;
 
     // 3. Refuse states where removal is surprising or impossible.
     if let Some(reason) = &wt.locked {
@@ -52,6 +45,10 @@ pub fn run(repo: &Repo, branch: &str, force: bool, cwd: &Path) -> Result<()> {
     {
         return Err(Error::InsideWorktree(wt.path.clone()));
     }
+
+    // 3b. A live job is using this worktree. Not overridable by --force. Fails
+    //     closed: if the job registry can't be read, removal is refused.
+    let lost_jobs = jobs::check_removal(repo, branch)?;
 
     // 4. Anything Git can't give back needs --force: uncommitted work (tracked
     //    changes or untracked files) *and* ignored files/directories such as
@@ -96,5 +93,11 @@ pub fn run(repo: &Repo, branch: &str, force: bool, cwd: &Path) -> Result<()> {
     println!(
         "  branch `{branch}` was kept; delete it with `git branch -d {branch}` if you no longer need it"
     );
+    if !lost_jobs.is_empty() {
+        println!(
+            "  warning: job(s) {} were lost earlier (their supervisor died, so their fate is unknown); a leftover process may still reference the deleted directory",
+            lost_jobs.join(", ")
+        );
+    }
     Ok(())
 }

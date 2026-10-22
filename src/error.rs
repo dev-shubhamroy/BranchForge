@@ -110,6 +110,62 @@ pub enum Error {
         examples: String,
     },
 
+    // ---- Jobs ----
+    #[error("running jobs is only supported on Unix-like systems (this platform lacks {0})")]
+    UnsupportedPlatform(&'static str),
+
+    #[error("invalid job id `{0}`: job ids are plain positive numbers such as `3`")]
+    InvalidJobId(String),
+
+    #[error("no job with id `{0}` (see `branchforge jobs`)")]
+    UnknownJob(String),
+
+    #[error(
+        "job `{id}` has unreadable metadata ({reason}); its logs, if any, can still be read with `branchforge logs {id}`"
+    )]
+    CorruptJob { id: String, reason: String },
+
+    #[error("job `{id}` is not running (state: {state})")]
+    JobNotRunning { id: String, state: String },
+
+    #[error("job `{id}` is already started or finished; refusing to run it again")]
+    JobAlreadyStarted { id: String },
+
+    #[error("could not start `{program}` for job {job_id}: {message}")]
+    JobStartFailed {
+        job_id: String,
+        program: String,
+        message: String,
+    },
+
+    #[error(
+        "job {job_id} never reported that it started (waited {secs}s); its supervisor may have been killed{details}"
+    )]
+    JobStartTimedOut {
+        job_id: String,
+        secs: u64,
+        details: String,
+    },
+
+    #[error("stop was requested for job {id} but it is still running after {secs}s")]
+    StopTimedOut { id: String, secs: u64 },
+
+    #[error("the program to run must not be empty")]
+    EmptyCommand,
+
+    #[error(
+        "branch `{branch}` has active job(s) [{ids}]; stop them with `branchforge stop <id>` before removing the worktree (--force does not override this)"
+    )]
+    ActiveJobs { branch: String, ids: String },
+
+    #[error(
+        "job data directory {0} exists but is not a plain directory (symlinks and files are refused)"
+    )]
+    BadDataDir(PathBuf),
+
+    #[error("could not encode job metadata")]
+    Metadata(#[source] serde_json::Error),
+
     // ---- Filesystem ----
     #[error("I/O error on {path}")]
     Io {

@@ -1,105 +1,11 @@
-//! End-to-end tests: run the real `branchforge` binary against temporary Git
-//! repositories. Git is isolated from the developer's global/system config.
+//! End-to-end tests for worktree management: run the real `branchforge`
+//! binary against temporary Git repositories.
+
+mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
-use tempfile::TempDir;
-
-fn isolate(cmd: &mut Command) -> &mut Command {
-    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-}
-
-/// Run git in `dir`, panicking with stderr on failure. Returns trimmed stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = isolate(Command::new("git").arg("-C").arg(dir).args(args))
-        .output()
-        .expect("git should be installed");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
-}
-
-struct Fixture {
-    _tmp: TempDir,
-    /// Canonicalized temp root (macOS tmp dirs are behind a symlink).
-    root: PathBuf,
-    repo: PathBuf,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-        let repo = root.join("repo");
-        fs::create_dir(&repo).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        fs::write(repo.join("README.md"), "hello\n").unwrap();
-        git(&repo, &["add", "README.md"]);
-        git(&repo, &["commit", "-q", "-m", "initial"]);
-        Self {
-            _tmp: tmp,
-            root,
-            repo,
-        }
-    }
-
-    fn managed_root(&self) -> PathBuf {
-        self.root.join("repo.worktrees")
-    }
-
-    fn wt_path(&self, encoded: &str) -> PathBuf {
-        self.managed_root().join(encoded)
-    }
-
-    fn bf_in(&self, cwd: &Path, args: &[&str]) -> Output {
-        isolate(
-            Command::new(env!("CARGO_BIN_EXE_branchforge"))
-                .current_dir(cwd)
-                .args(args),
-        )
-        .output()
-        .unwrap()
-    }
-
-    fn bf(&self, args: &[&str]) -> Output {
-        self.bf_in(&self.repo, args)
-    }
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-#[track_caller]
-fn assert_ok(out: &Output) -> String {
-    assert!(
-        out.status.success(),
-        "expected success, stderr: {}",
-        stderr(out)
-    );
-    stdout(out)
-}
-#[track_caller]
-fn assert_fails(out: &Output) -> String {
-    assert!(
-        !out.status.success(),
-        "expected failure, stdout: {}",
-        stdout(out)
-    );
-    stderr(out)
-}
+use common::*;
 
 // ---------------------------------------------------------------- new
 
