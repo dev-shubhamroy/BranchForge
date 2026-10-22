@@ -37,10 +37,13 @@ fn describe_branch(entry: &Entry) -> String {
 
 /// Render entries as an aligned table. The last column (path) is not padded.
 pub fn render_table(entries: &[Entry]) -> String {
-    let header = ["BRANCH", "KIND", "STATE", "SYNC", "PATH"];
-    let mut rows: Vec<[String; 5]> = vec![header.map(String::from)];
+    let mut rows: Vec<Vec<String>> = vec![
+        ["BRANCH", "KIND", "STATE", "SYNC", "PATH"]
+            .map(String::from)
+            .to_vec(),
+    ];
     for e in entries {
-        rows.push([
+        rows.push(vec![
             describe_branch(e),
             e.kind.label().to_string(),
             describe_state(e),
@@ -48,22 +51,26 @@ pub fn render_table(entries: &[Entry]) -> String {
             e.worktree.path.display().to_string(),
         ]);
     }
+    render_columns(&rows)
+}
 
-    let mut widths = [0usize; 5];
-    for row in &rows {
+/// Align rows of cells into columns (two spaces between columns). The first
+/// row is conventionally the header; the last column is not padded.
+pub fn render_columns(rows: &[Vec<String>]) -> String {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut widths = vec![0usize; columns];
+    for row in rows {
         for (w, cell) in widths.iter_mut().zip(row) {
             *w = (*w).max(cell.chars().count());
         }
     }
 
     let mut out = String::new();
-    for row in &rows {
-        let last = row.len() - 1;
+    for row in rows {
+        let last = row.len().saturating_sub(1);
         for (i, cell) in row.iter().enumerate() {
-            if i == last {
-                out.push_str(cell);
-            } else {
-                out.push_str(cell);
+            out.push_str(cell);
+            if i != last {
                 let pad = widths[i] - cell.chars().count() + 2;
                 out.extend(std::iter::repeat_n(' ', pad));
             }
@@ -159,5 +166,20 @@ mod tests {
         let col = lines[0].find("KIND").unwrap();
         assert!(lines[1][col..].starts_with("main"));
         assert!(lines[2][col..].starts_with("external"));
+    }
+
+    #[test]
+    fn render_columns_aligns_and_leaves_the_last_column_unpadded() {
+        let rows = vec![
+            vec!["ID".to_string(), "STATE".to_string(), "CMD".to_string()],
+            vec!["10".to_string(), "ok".to_string(), "echo hi".to_string()],
+            vec!["2".to_string(), "failed".to_string(), "x".to_string()],
+        ];
+        let out = render_columns(&rows);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "ID  STATE   CMD");
+        assert_eq!(lines[1], "10  ok      echo hi");
+        assert_eq!(lines[2], "2   failed  x");
+        assert!(render_columns(&[]).is_empty());
     }
 }

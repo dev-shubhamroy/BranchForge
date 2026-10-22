@@ -77,4 +77,27 @@ impl Repo {
     pub fn is_main(&self, wt: &Worktree) -> bool {
         std::ptr::eq(wt, self.main())
     }
+
+    /// The worktree for `branch`, but only if BranchForge manages it: it must
+    /// exist, not be the main worktree, sit at exactly the managed path (and not
+    /// be a symlink), and the managed root must be a plain directory.
+    ///
+    /// Shared by `remove` and `run` so both apply identical ownership rules.
+    pub fn require_managed(&self, branch: &str) -> Result<&Worktree> {
+        let wt = self
+            .find_by_branch(branch)
+            .ok_or_else(|| Error::WorktreeNotFound(branch.to_string()))?;
+        if self.is_main(wt) {
+            return Err(Error::MainWorktree(branch.to_string()));
+        }
+        if !self.layout.owns_path(wt) {
+            return Err(Error::NotManaged {
+                branch: branch.to_string(),
+                path: wt.path.clone(),
+                expected: self.layout.path_for(branch)?,
+            });
+        }
+        self.layout.check_root()?;
+        Ok(wt)
+    }
 }
